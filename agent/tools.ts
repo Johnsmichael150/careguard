@@ -198,12 +198,55 @@ export async function auditBill(lineItems: Array<{ description: string; cptCode:
       body: JSON.stringify({ lineItems }),
     });
   } catch (err: any) {
-    throw new Error(`Bill Audit API unreachable: ${err.message}. Ensure the service is running on ${BILL_AUDIT_API}`);
+    const baseUrl = BILL_AUDIT_API;
+    const docsHint = "See docs/setup/services.md for local service setup.";
+    const message = typeof err?.message === "string" ? err.message : "Unknown network error";
+    const code = err?.cause?.code || err?.code;
+
+    if (code === "ECONNREFUSED") {
+      throw new Error(
+        `Bill Audit API connection refused (ECONNREFUSED). This is usually a config or startup issue. ` +
+        `Ensure BILL_AUDIT_API_URL points to a running service (currently ${baseUrl}). ${docsHint}`
+      );
+    }
+
+    if (code === "ETIMEDOUT" || code === "UND_ERR_CONNECT_TIMEOUT" || code === "UND_ERR_SOCKET") {
+      throw new Error(
+        `Bill Audit API request timed out. This is often transient (network hiccup or cold start). ` +
+        `Try again; if it persists, verify the service at ${baseUrl} is reachable. ${docsHint}`
+      );
+    }
+
+    if (code === "ENOTFOUND") {
+      throw new Error(
+        `Bill Audit API hostname not found (ENOTFOUND). Check BILL_AUDIT_API_URL (currently ${baseUrl}). ${docsHint}`
+      );
+    }
+
+    throw new Error(
+      `Bill Audit API unreachable. ${message}. Verify the service is reachable at ${baseUrl}. ${docsHint}`
+    );
   }
 
   if (!response.ok) {
     const error = await response.text();
-    throw new Error(`Bill Audit API error (${response.status}): ${error.slice(0, 200)}`);
+    const bodyPreview = error.slice(0, 200);
+
+    if (response.status >= 500) {
+      throw new Error(
+        `Bill Audit API is up but failing (${response.status}). This indicates a downstream/service bug or outage. ` +
+        `Try again later or check the Bill Audit service logs. Details: ${bodyPreview}`
+      );
+    }
+
+    if (response.status >= 400 && response.status < 500) {
+      throw new Error(
+        `Bill Audit API rejected the request (${response.status}). This is likely a caller/input issue. ` +
+        `Verify the payload schema and required env vars. Details: ${bodyPreview}`
+      );
+    }
+
+    throw new Error(`Bill Audit API error (${response.status}): ${bodyPreview}`);
   }
 
   const data = await response.json();
